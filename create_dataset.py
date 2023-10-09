@@ -73,12 +73,41 @@ def convert_files_to_csv(root_folder):
         print(f"Directory {root_folder} not found.")
         
         
-def normalize_dataset(root_folder):
+
+
+def normalize_dataset(root_folder, mode='sentiment'):
     for folder_path, _, filenames in os.walk(root_folder):
         for filename in filenames:
             if filename.endswith('.csv'):
-                file_path = os.path.join(folder_path,filename)
+                file_path = os.path.join(folder_path, filename)
                 df = pd.read_csv(file_path)
+                
+                # Drop ID columns (case-insensitive)
+                df.drop(columns=[col for col in df.columns if 'id' in col.lower()], inplace=True)
+                
+                # Column name regularization
+                if 'text' not in df.columns:
+                    # rename the column that contains text data to 'text'
+                    pass
+                
+                # Class label regularization
+                if mode == 'emotion':
+                    emotion_class_mapping ={k.lower(): v.lower for k, v in  {'happy': 'joy', 'irate': 'angry', 'sadness':'sad','unhappy':'sad'}.items()}
+
+                    df['emotion'] = df['emotion'].str.lower()
+
+                    df['emotion'] = df['emotion'].map(emotion_class_mapping)
+
+                    
+                
+                # Save the normalized DataFrame back to disk
+                df.to_csv(file_path, index=False)
+                
+            else: 
+                print(f"File: {filename} is not a csv; it has been ignored.")
+
+
+            
 
 
 def process_dataset(root_folder, mode='unbalanced'):
