@@ -1,6 +1,6 @@
 # Standard library imports (if any)
 import sys
-sys.path.append(r'D:\Users\WillR\VsCodeProjects\Natural Language Processing\tinyEmoBERT')
+sys.path.append(r'D:\Users\User\VsCodeProjects\Natural Language Processing\tinyEmoBERT')
 from models.tinyEmoBERT import tinyBERT_finetune
 
 # Third-party library imports
@@ -313,7 +313,7 @@ def main(mode = "full"):
     emotion_dataloader_test = DataLoader(emotion_data_test, batch_size=256)
     NUM_SENTIMENT_LABELS = 3
     NUM_EMOTION_LABELS = 9
-    LOG_DIR = r"D:\Users\WillR\VsCodeProjects\Natural Language Processing\tinyEmoBERT\no_callback_log"
+    LOG_DIR = r"D:\Users\User\VsCodeProjects\Natural Language Processing\tinyEmoBERT\no_callback_log"
     
 
     model = tinyBERT_finetune(num_sentiment_labels=NUM_SENTIMENT_LABELS, num_emotion_labels=NUM_EMOTION_LABELS)
