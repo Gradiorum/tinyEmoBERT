@@ -1,0 +1,187 @@
+import sys
+sys.path.append()
+import pandas as pd
+from transformers import pipeline
+import torch
+from tqdm import tqdm
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, matthews_corrcoef
+from tinyEmoBERT.utils.Metrics import TinyEmoBoard 
+import random
+
+class ModelTester:
+    def __init__(self, model_name, sentiment_csv, emotion_csv, s_example_csv="", e_example_csv="", sentiment_pre_prompt="", emotion_pre_prompt="", sentiment_prompt="", emotion_prompt="", device="cuda"):
+        self.device = 0 if torch.cuda.is_available() and device == "cuda" else -1
+        self.model_name = model_name
+        self.s_prompt = sentiment_prompt
+        self.e_prompt = emotion_prompt
+        self.s_system_prompt = sentiment_pre_prompt
+        self.e_system_prompt = emotion_pre_prompt
+        self.sentiment_csv = sentiment_csv
+        self.emotion_csv = emotion_csv
+        self.s_example_csv = s_example_csv
+        self.e_example_csv = e_example_csv
+        self.writer = TinyEmoBoard()
+        self.model = pipeline('text-generation', model=self.model_name,
+                              tokenizer=self.model_name,
+                              device=self.device,
+                              do_sample = False,
+                              top_p = None,
+                              repetition_penalty=1.1,
+                              max_new_tokens=10)
+
+    def load_data(self, csv_path):
+        df = pd.read_csv(csv_path)
+        texts = df.iloc[:, 0].tolist()
+        labels = df.iloc[:, 1].tolist()
+        return texts, labels
+    
+    def load_data_stratified(self, csv_path, sample_size=100):
+        df = pd.read_csv(csv_path)
+
+        # Check if the dataset is large enough to be sampled down
+        if len(df) > sample_size:
+            # Stratified sampling based on labels
+            label_column = df.columns[1]
+            # Calculate the number of samples per label based on their distribution in the dataset
+            sample_frac = sample_size / len(df)
+            sampled_df = df.groupby(label_column, group_keys=False).apply(lambda x: x.sample(frac=sample_frac))
+
+            # In case of rounding issues, we ensure that the total number of samples is exactly sample_size
+            sampled_df = sampled_df.sample(n=sample_size, random_state=1)
+        else:
+            sampled_df = df
+
+        texts = sampled_df.iloc[:, 0].tolist()
+        labels = sampled_df.iloc[:, 1].tolist()
+        return texts, labels
+    
+    def calculate_metrics(self, true_labels, predictions):
+        assert len(true_labels) == len(predictions)
+
+        # Calculate metrics
+        accuracy = accuracy_score(true_labels, predictions)
+        precision = precision_score(true_labels, predictions, average='macro', zero_division=0)
+        recall = recall_score(true_labels, predictions, average='macro', zero_division=0)
+        f1 = f1_score(true_labels, predictions, average='macro', zero_division=0)
+        mcc = matthews_corrcoef(true_labels, predictions)
+
+        # These metrics can be either logged or returned
+        metrics = {
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'mcc': mcc
+        }
+
+        return metrics
+
+    def create_prompt(self, examples, text, labels=None, shot_type='zero', prompt_type=""):
+        prompt = ""
+        if prompt_type != "":
+            if prompt_type.lower() == "emotion":
+                prompt += self.e_system_prompt
+            elif prompt_type.lower() == "sentiment":
+                prompt += self.s_system_prompt
+            else:
+                raise ValueError("Unsupported prompt_type provided. Expected 'emotion' or 'sentiment'. ")
+
+        if shot_type != 'zero':
+            for example, label in zip(examples, labels):
+                prompt += f"Example(s): '{example}' Label: {label}\n"
+        prompt += f"Text: '{text}' Label: "
+        return prompt
+
+    def parse_prediction(self, model_output, possible_labels):
+        normalized_output = model_output.lower()
+
+        for label in possible_labels:
+            normalized_label = label.lower()
+            if normalized_label in normalized_output:
+                return label
+
+        return None
+
+    def get_examples_per_label(self, texts, labels, num_examples_per_label):
+        df = pd.DataFrame({'Text': texts, 'Label': labels})
+        if num_examples_per_label == 1:
+            sampled_df = df.groupby('Label').apply(lambda x: x.sample(n=1)).reset_index(drop=True)
+        else:
+            sampled_df = df.groupby('Label').apply(lambda x: x.sample(n=num_examples_per_label, replace=True)).reset_index(drop=True)
+        return sampled_df['Text'].tolist(), sampled_df['Label'].tolist()
+
+
+    def test_model_on_sentiment(self, shot_type='zero'):
+        sentiment_texts, sentiment_labels = self.load_data_stratified(self.sentiment_csv)
+        
+        if shot_type != 'zero':
+            example_texts, example_labels = self.load_data(self.s_example_csv)
+            example_texts, example_labels = self.get_examples_per_label(example_texts, example_labels, num_examples_per_label=3)
+        else:
+            example_texts, example_labels = ([], [])
+
+        predictions_list = []
+        for text, true_label in tqdm(zip(sentiment_texts, sentiment_labels), total=len(sentiment_texts)):
+            prompt = self.create_prompt(example_texts, text, example_labels, shot_type, 'sentiment')
+            model_output = self.model(prompt, max_length=300)[0]['generated_text']
+            print("Generated Text:", model_output.encode('utf-8', errors='replace'))# Debug output
+  
+            predicted_label = self.parse_prediction(model_output, set(sentiment_labels))
+            predictions_list.append(predicted_label)
+
+        metrics = self.calculate_metrics(sentiment_labels, predictions_list)
+        
+        return metrics
+
+    def test_model_on_emotion(self, shot_type='zero'):
+        emotion_texts, emotion_labels = self.load_data_stratified(self.emotion_csv)
+
+        if shot_type != 'zero':
+            example_texts, example_labels = self.load_data(self.e_example_csv)
+            example_texts, example_labels = self.get_examples_per_label(example_texts, example_labels,num_examples_per_label=3)
+        else:
+            example_texts, example_labels = ([], [])
+
+        predictions_list = []
+        for text, true_label in tqdm(zip(emotion_texts, emotion_labels), total=len(emotion_labels)):
+            prompt = self.create_prompt(example_texts, text, example_labels, shot_type, 'emotion')
+            model_output = self.model(prompt, max_length=300)[0]['generated_text']
+            print("Generated Text:", model_output.encode('utf-8', errors='replace'))# Debug output
+            predicted_label = self.parse_prediction(model_output, set(emotion_labels))
+            predictions_list.append(predicted_label)
+
+        metrics = self.calculate_metrics(emotion_labels, predictions_list)
+
+        return metrics
+
+    def run_test(self, test_type="full", shot_type='one'):
+        sentiment_metrics = None
+        emotion_metrics = None
+
+        if test_type.lower() in ["sentiment", "full"]:
+            sentiment_metrics = self.test_model_on_sentiment(shot_type)
+            if test_type.lower() == "sentiment":
+                print("Sentiment Metrics:", sentiment_metrics)
+
+        if test_type.lower() in ["emotion", "full"]:
+            emotion_metrics = self.test_model_on_emotion(shot_type)
+            if test_type.lower() == "emotion":
+                print("Emotion Metrics:", emotion_metrics)
+
+        if test_type.lower() == "full":
+            print("Sentiment Metrics:", sentiment_metrics)
+            print("Emotion Metrics:", emotion_metrics)
+
+# Usage
+tester = ModelTester(model_name="meta-llama/Llama-2-7b-chat-hf",
+                     sentiment_csv=r"E:\text_datasets\test_sentiment.csv",
+                     emotion_csv=r"E:\text_datasets\test_emotion.csv",
+                     s_example_csv=r"E:\text_datasets\val_sentiment.csv",
+                     e_example_csv=r"E:\text_datasets\val_emotion.csv",
+                     sentiment_pre_prompt="""Classify the sentiment of the text as either {Negative, Positive, Neutral}. Always provide a one-word answer, even if uncertain.""",
+                     emotion_pre_prompt="""Identify the emotion from {Joy, Sad, Anger, Fear, Love, Surprise, Neutral, Worry} in the text. Provide a one-word answer in all cases, even in ambiguity.""",
+                     sentiment_prompt="Sentiment to be classified:",
+                     emotion_prompt="Emotion to be classified:",
+                     device="cpu")
+
+tester.run_test(test_type="full", shot_type='three')
